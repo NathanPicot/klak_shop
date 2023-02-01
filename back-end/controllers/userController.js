@@ -1,102 +1,204 @@
-const User = require('../models/user.js');
-const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken");
-const validator = require("email-validator");
+const User = require('../models/userModel');
+const bcrypt = require('bcrypt');
+const saltRounds = 10;
 const passwordValidator = require('password-validator');
+const emailValidator = require('email-validator');
+const jwt = require('jsonwebtoken');
+require('dotenv').config();
+const nodemailer = require('nodemailer');
+const nodeoutlook = require('nodejs-nodemailer-outlook');
 
-// Create a schema
+const transporter = nodemailer.createTransport({
+    host: "smtp.hostinger.com",
+    port: 465,
+    secure: true, // upgrade later with STARTTLS
+    auth: {
+        user: process.env.EMAIL,
+        pass: process.env.PASSWORD_EMAIL
+    }
+});
+
 const schema = new passwordValidator();
 
-// Add properties to it
 schema
-    .is().min(8,'minimum 8 caractere')                                    // Minimum length 8
-    .has().symbols(1,'doit contenir au moins 1 symbol')
-    .has().uppercase(1, 'doit contenir au moins 1 majuscule')                              // Must have uppercase letters
-    .has().lowercase(1, 'doit contenir au moins 1 minuscule')                              // Must have lowercase letters
-    .has().digits(1,'doit contenir au moins 1 chiffre')                                // Must have at least 1 digits
+    .is().min(8)                                    // Minimum length 8
+    .is().max(100)                                  // Maximum length 100
+    .has().uppercase()                              // Must have uppercase letters
+    .has().lowercase()                              // Must have lowercase letters
+    .has().digits()                                // Must have digits
     .has().not().spaces()                           // Should not have spaces
+    .is().not().oneOf(['Passw0rd', 'Password123', 'password', 'Password']); // Blacklist these values
 
-
-
-
-
-exports.login = (req, res, next) =>
-{
-
-
-
-
-
-    // Validate parameters
-    console.log(req.body);
-    const email = req.body.email;
-    const password = req.body.password;
-    if (!email || !password) {
-        return res.status(400).json({error: 'Invalid parameters'});
-    }
-
-    // Search for user with provided username
-    User.findOne({email: email}, (err, user) => {
+exports.createUser = (req, res, next) => {
+    User.findOne({ email: req.body.email }, (err, userWithSameEmail) => {
         if (err) {
-            return res.status(500).json({error: 'Error searching for user'});
+            res.status(400).json({message: 'Error getting email try gain',});
         }
-        if (!user) {
-            return res.status(400).json({error: 'Invalid username or password'});
+        else if (userWithSameEmail) {
+            res.status(400).json({ message: 'This email is taken' });
         }
-
-        // Compare provided password to hashed password in database
-        bcrypt.compare(password, user.password, (err, result) => {
-            if (err) {
-                return res.status(500).json({error: 'Error comparing passwords'});
-            }
-            if (!result) {
-                return res.status(400).json({error: 'Invalid username or password'});
-            }
-
-            // Create JWT
-            const token = jwt.sign({userId: user._id}, process.env.PRIVATE_TOKEN, {expiresIn: '1h'});
-
-            // Return JWT to client
-            res.send({
-                success: true,
-                message: 'Vous êtes connecté avec le token ' + token,
+        else {
+            const user = new User({
+                lastname: req.body.lastname,
+                firstname: req.body.firstname,
+                email: req.body.email,
+                phoneNumber: req.body.phoneNumber,
+                password: req.body.password,
+                streetNumber: req.body.streetNumber,
+                streetName: req.body.streetName,
+                zipCode: req.body.zipCode
             });
 
-        });
+            if (!schema.validate(user.password)) {
+                res.status(400).json({message: "format password incorrect"})
+            }
+            else {
+                if(!emailValidator.validate(user.email)){
+                    res.status(400).json({message: "format email incorrect"})
+                }
+                else {
+                    const mailOptions = {
+                        from: "test@2mn.info",
+                        to: user.email,
+                        subject: 'mabrouk',
+                        text: 'Bravo!!! Vous avez gagné un voyage au maroc tout frais payé pour une semaine!!'
+                    };
+
+                    transporter.sendMail(mailOptions, function(error, info){
+                        if (error) {
+                            console.log(error);
+                        } else {
+                            console.log('Email sent: ' + info.response);
+                        }
+                    });
+                    bcrypt.genSalt(saltRounds, function(err, salt) {
+                        bcrypt.hash(user.password, salt, function(err, hash) {
+                            user.password = hash;
+                            user.save().then( () => {
+                                    res.status(201).json({message: 'User added !'});
+                                }
+                            ).catch( (error) => {
+                                res.status(400).json({error: error});
+                            });
+                        });
+                    });
+                }
+            }
+        }
     });
-}
+};
 
-exports.signup = (req, res, next) =>
-{
-    username = req.body.username;
-    password = req.body.password;
-    email = req.body.email;
 
-    console.log(username);
+exports.getOneUser = (req, res, next) => {
+    User.findOne({
+        _id: req.params.id
+    }).then(
+        (user) => {
+            res.status(200).json(user);
+        }
+    ).catch(
+        (error) => {
+            res.status(404).json({
+                error: error
+            });
+        }
+    );
+};
 
-    // Validate the sign-up information
-    if (!username || !password || !email) {
-        return res.status(400).send({ error: 'Tout les champs sont requis' });
-    }
-    if(!validator.validate(email)){
-        return res.status(400).send({error: 'email invalide'})
-    }
-    if (!schema.validate(password)){
-        return res.status(400).send({error: schema.validate(password , { details: true })})
-
-    }
-
-    // Hash the password
-    const hashedPassword = bcrypt.hashSync(password, 10);
-    // Store the user in the database
-    const user =new User({
-        username: username,
-        email: email,
-        password: hashedPassword,
-
+exports.modifyUser = (req, res, next) => {
+    const user = new User({
+        _id: req.params.id,
+        lastname: req.body.lastname,
+        firstname: req.body.firstname,
+        email: req.body.email,
+        phoneNumber: req.body.phoneNumber,
+        password: req.body.password,
+        streetNumber: req.body.streetNumber,
+        streetName: req.body.streetName,
+        zipCode: req.body.zipCode
     });
-    user.save()
-        .then(() => res.status(201).json({ message: 'Objet enregistré !'}))
-        .catch(error => res.status(400).json({ error }));
-}
+    User.updateOne({_id: req.params.id}, user).then(
+        () => {
+            res.status(201).json({
+                message: 'User updated!'
+            });
+        }
+    ).catch(
+        (error) => {
+            res.status(400).json({
+                error: error
+            });
+        }
+    );
+};
 
+exports.deleteUser = (req, res, next) => {
+    User.deleteOne({_id: req.params.id}).then(
+        () => {
+            res.status(200).json({
+                message: 'Deleted!'
+            });
+        }
+    ).catch(
+        (error) => {
+            res.status(400).json({
+                error: error
+            });
+        }
+    );
+};
+
+exports.getAllUser = (req, res, next) => {
+    User.find().then(
+        (user) => {
+            res.status(200).json(user);
+        }
+    ).catch(
+        (error) => {
+            res.status(400).json({
+                error: error
+            });
+        }
+    );
+};
+
+exports.login = (req, res, next) => {
+    User.findOne({ email: req.body.email }).then(
+        (user) => {
+            if (!user) {
+                return res.status(401).json({
+                    error: new Error('User not found!')
+                });
+            }
+            bcrypt.compare(req.body.password, user.password).then(
+                (valid) => {
+                    if (!valid) {
+                        return res.status(401).json({
+                            error: new Error('Incorrect password!')
+                        });
+                    }
+                    const token = jwt.sign(
+                        { userId: user._id },
+                        process.env.SECRET_TOKEN_KEY,
+                        { expiresIn: '24h' });
+                    res.status(200).json({
+                        userId: user._id,
+                        token: token
+                    });
+                }
+            ).catch(
+                (error) => {
+                    res.status(500).json({
+                        error: error
+                    });
+                }
+            );
+        }
+    ).catch(
+        (error) => {
+            res.status(500).json({
+                error: error
+            });
+        }
+    );
+}
